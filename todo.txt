@@ -1,0 +1,2 @@
+- Canvas access token expiration. 
+- get agent to ask follow ups if confused on the task so it can iterate with the user.

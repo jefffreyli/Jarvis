@@ -1,0 +1,15 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "relay"
+resolve_s3 = true
+s3_prefix = "relay"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = true
+parameter_overrides = "AlexaSkillId=\"amzn1.ask.skill.7bff292b-8f73-4a0b-a0c2-3ee1bc4669b1\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-east-1"

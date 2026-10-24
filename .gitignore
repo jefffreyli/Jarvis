@@ -1,0 +1,31 @@
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local data: memory database, Notion OAuth tokens
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs (contain conversation content)
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# AWS SAM build output
+aws/.aws-sam/
+
+# OS and editors
+.DS_Store
+.vscode/
+.idea/

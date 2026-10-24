@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Jarvis relay. The local backend dials out to a WebSocket API, and Alexa and Linq
+  reach it through Lambdas that forward their requests down that connection.
+
+Parameters:
+  RelaySecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Shared secret the backend presents when connecting (RELAY_SECRET in .env).
+  AlexaSkillId:
+    Type: String
+    AllowedPattern: "amzn1\\.ask\\.skill\\..+"
+    Description: The Alexa skill's id, from the Alexa developer console.
+
+Globals:
+  Function:
+    Runtime: python3.13
+    CodeUri: functions/
+    MemorySize: 256
+    Timeout: 10
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref RelayTable
+
+Resources:
+  RelayTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  # WebSocket API the backend connects to
+  RelayWebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: jarvis-relay
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  ConnectionsIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref RelayWebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectionsFunction.Arn}/invocations"
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref RelayWebSocketApi
+      RouteKey: $connect
+      Target: !Sub "integrations/${ConnectionsIntegration}"
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref RelayWebSocketApi
+      RouteKey: $disconnect
+      Target: !Sub "integrations/${ConnectionsIntegration}"
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref RelayWebSocketApi
+      RouteKey: $default
+      Target: !Sub "integrations/${ConnectionsIntegration}"
+
+  RelayStage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn:
+      - ConnectRoute
+      - DisconnectRoute
+      - DefaultRoute
+    Properties:
+      ApiId: !Ref RelayWebSocketApi
+      StageName: prod
+      AutoDeploy: true
+      # Caps the cost of strangers hammering the public endpoint.
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 10
+
+  ConnectionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: connections.handler
+      Environment:
+        Variables:
+          RELAY_SECRET: !Ref RelaySecret
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RelayTable
+
+  ConnectionsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ConnectionsFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RelayWebSocketApi}/*"
+
+  # Alexa skill endpoint
+  SkillFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: skill.handler
+      Environment:
+        Variables:
+          SKILL_ID: !Ref AlexaSkillId
+          CONNECTIONS_URL: !Sub "https://${RelayWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${RelayStage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RelayTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RelayWebSocketApi}/${RelayStage}/POST/@connections/*"
+      Events:
+        Alexa:
+          Type: AlexaSkill
+          Properties:
+            SkillId: !Ref AlexaSkillId
+
+  # Linq webhook endpoint
+  LinqWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: linq_webhook.handler
+      Environment:
+        Variables:
+          CONNECTIONS_URL: !Sub "https://${RelayWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${RelayStage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RelayTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RelayWebSocketApi}/${RelayStage}/POST/@connections/*"
+      Events:
+        Webhook:
+          Type: HttpApi
+          Properties:
+            Path: /linq/webhook
+            Method: POST
+
+Outputs:
+  RelayUrl:
+    Description: RELAY_URL for .env
+    Value: !Sub "wss://${RelayWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${RelayStage}"
+  LinqWebhookUrl:
+    Description: LINQ_WEBHOOK_URL for .env
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/linq/webhook"
+  SkillFunctionArn:
+    Description: Paste into the Alexa skill's Endpoint page (AWS Lambda ARN)
+    Value: !GetAtt SkillFunction.Arn
