@@ -11,11 +11,12 @@ stored on OpenAI's side. If a server cannot be used (no token, or OpenAI cannot 
 it), the request goes ahead without it rather than failing.
 Transient failures (rate limits, timeouts, 5xx) are retried by the OpenAI SDK; anything
 still failing, or a response that did not complete, raises an error instead of
-returning a partial answer.
+returning a partial answer. Each response is logged with its latency and token usage.
 """
 
 import base64
 import logging
+import time
 from typing import Any
 
 from openai import APIStatusError, AsyncOpenAI
@@ -103,12 +104,31 @@ class OpenAIClient(LLM):
         Returns:
             The API response.
         """
-        return await self._client.responses.create(
+        started = time.monotonic()
+        response = await self._client.responses.create(
             model=self.model,
             input=input_items,
             tools=tools,
             store=False,
         )
+
+        input_tokens = 0
+        output_tokens = 0
+        if response.usage is not None:
+            input_tokens = response.usage.input_tokens
+            output_tokens = response.usage.output_tokens
+        logger.info(
+            "OpenAI response %s from %s in %.2fs: %s, %d input items, %d tools, %d input and %d output tokens",
+            response.id,
+            self.model,
+            time.monotonic() - started,
+            response.status,
+            len(input_items),
+            len(tools),
+            input_tokens,
+            output_tokens,
+        )
+        return response
 
     async def _mcp_tools(self) -> list[dict[str, Any]]:
         """
@@ -161,7 +181,9 @@ class OpenAIEmbedder(Embedder):
         Returns:
             One vector per text, in the same order.
         """
+        started = time.monotonic()
         response = await self._client.embeddings.create(model=self.model, input=texts)
+        logger.info("Embedded %d texts with %s in %.2fs", len(texts), self.model, time.monotonic() - started)
 
         # The API labels each vector with the index of its input, so order by that.
         vectors_by_index = {}

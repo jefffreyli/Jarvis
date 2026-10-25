@@ -4,16 +4,19 @@ llm/hosted_mcp.py, which OpenAI calls, Jarvis runs a local server itself as a
 subprocess and talks to it over stdio for as long as Jarvis runs. On start it asks the
 server for its tools and keeps only those the server marks read-only, each wrapped as an
 McpTool so the ToolRegistry offers and runs it like any other tool. A call is forwarded
-to the server, and its text result comes back as the tool's output.
+to the server, and its text result comes back as the tool's output. The server's own log
+(its stderr) is read through a pipe and written to Jarvis's log, one record per line.
 """
 
 import asyncio
 import json
 import logging
+import os
+import re
+import threading
 from contextlib import AsyncExitStack
 from datetime import timedelta
-from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import anyio
 from mcp import ClientSession, McpError, StdioServerParameters
@@ -27,24 +30,24 @@ logger = logging.getLogger(__name__)
 
 START_TIMEOUT_SECONDS = 30
 CALL_TIMEOUT_SECONDS = 60
+# A line in Python's common log format, like "2026-10-24 22:47:40 - canvas_mcp - INFO - Ready".
+SERVER_LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\S* - \S+ - (?P<level>[A-Z]+) - (?P<message>.*)$")
 
 
 class LocalMcpServer:
     """A local MCP server that Jarvis runs as a subprocess and calls tools on over stdio."""
 
-    def __init__(self, label: str, command: str, env: dict[str, str], log_path: Path):
+    def __init__(self, label: str, command: str, env: dict[str, str]):
         """
         Args:
             label: Short name for logs and errors, like "canvas".
             command: The executable that starts the server, like "canvas-mcp-server".
             env: Environment variables for the server. Jarvis's own environment, with its
                 API keys, is not passed on.
-            log_path: File the server's stderr is written to, so it stays out of the terminal.
         """
         self.label = label
         self.command = command
         self.env = env
-        self.log_path = log_path
         self._stack = AsyncExitStack()
         self._session: ClientSession | None = None
         # The server's read-only tools, filled in by start().
@@ -53,16 +56,16 @@ class LocalMcpServer:
     async def start(self) -> None:
         """Start the server, complete the MCP handshake and list its read-only tools. Call stop() afterwards, even if this fails."""
         params = StdioServerParameters(command=self.command, env=self.env)
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = self._stack.enter_context(open(self.log_path, "a"))
+        errlog = self._stack.enter_context(_open_server_log(logging.getLogger(f"mcp.{self.label}")))
 
-        read, write = await self._stack.enter_async_context(stdio_client(params, errlog=log_file))
+        read, write = await self._stack.enter_async_context(stdio_client(params, errlog=errlog))
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await asyncio.wait_for(session.initialize(), START_TIMEOUT_SECONDS)
         listed = await asyncio.wait_for(session.list_tools(), START_TIMEOUT_SECONDS)
 
         self._session = session
         self.tools = self._read_only(listed.tools)
+        logger.info("Started the %s MCP server with %d read-only tools", self.label, len(self.tools))
 
     def _read_only(self, listed: list[McpToolInfo]) -> list["McpTool"]:
         """
@@ -213,3 +216,42 @@ def _result_text(result: CallToolResult) -> str:
     if len(parts) == 0:
         return "(The tool returned no text.)"
     return "\n".join(parts)
+
+
+def _open_server_log(server_logger: logging.Logger) -> TextIO:
+    """
+    Make a file for a server's stderr whose lines are written to a logger. The server
+    needs a real file descriptor, so this is the write end of a pipe, and a background
+    thread reads the other end until the server and the file are both closed.
+
+    Args:
+        server_logger: Receives one record per line.
+    Returns:
+        The write end, to close once the server has stopped.
+    """
+    read_fd, write_fd = os.pipe()
+    reader = threading.Thread(target=_forward_lines, args=(os.fdopen(read_fd), server_logger), daemon=True)
+    reader.start()
+    return os.fdopen(write_fd, "w")
+
+
+def _forward_lines(pipe: TextIO, server_logger: logging.Logger) -> None:
+    """
+    Log each line a server writes, at the level the line names if it has one.
+
+    Args:
+        pipe: The read end of the server's stderr.
+        server_logger: Receives one record per line.
+    """
+    levels = logging.getLevelNamesMapping()
+    with pipe:
+        for line in pipe:
+            line = line.rstrip()
+            if line == "":
+                continue
+            match = SERVER_LOG_LINE.match(line)
+            if match is None:
+                server_logger.info(line)
+                continue
+            level = levels.get(match.group("level"), logging.INFO)
+            server_logger.log(level, match.group("message"))

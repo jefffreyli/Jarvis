@@ -5,8 +5,11 @@ needed. It authenticates with a shared secret and reconnects whenever API Gatewa
 it (API Gateway closes idle connections after 10 minutes, so a heartbeat is sent, and
 every connection after 2 hours). Each incoming message is handed to the handler
 registered for its "type", in a background task so a long agent turn never holds up
-other messages. Gateways answer by sending messages with an "action", which API
-Gateway routes to the relay's Lambda.
+other messages, and tagged with the trace the Lambda chose, so the backend's log lines
+for a request match the Lambda's. The Lambdas also send their own log records down as
+"relay.log" messages, which are written to Jarvis's log with their original time and
+trace. Gateways answer by sending messages with an "action", which API Gateway routes to
+the relay's Lambda.
 """
 
 import asyncio
@@ -20,6 +23,8 @@ import certifi
 from websockets.asyncio.client import ClientConnection, connect, process_exception
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+import logs
+
 logger = logging.getLogger(__name__)
 
 SECRET_HEADER = "x-jarvis-secret"
@@ -27,6 +32,7 @@ HEARTBEAT_SECONDS = 300
 SEND_WAIT_SECONDS = 10
 # API Gateway rejects websocket frames from clients larger than 32 KB.
 MAX_MESSAGE_BYTES = 32_000
+LOG_TYPE = "relay.log"
 
 MessageHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -48,7 +54,7 @@ class RelayClient:
         self.url = url
         self.secret = secret
         self.notify = notify
-        self._handlers: dict[str, MessageHandler] = {}
+        self._handlers: dict[str, MessageHandler] = {LOG_TYPE: _log_lambda_records}
         self._websocket: ClientConnection | None = None
         self._connected = asyncio.Event()
         self._runner: asyncio.Task | None = None
@@ -100,6 +106,7 @@ class RelayClient:
             await self._websocket.send(data)
         except ConnectionClosed as e:
             raise RelayError(f"The relay connection closed: {e}") from None
+        logger.info("Sent %s to the relay (%d bytes)", _describe(message), len(data))
 
     async def _run(self) -> None:
         """Connect, reconnecting with backoff, and dispatch messages until cancelled."""
@@ -119,6 +126,7 @@ class RelayClient:
                 if connected_before:
                     logger.info("Reconnected to the relay")
                 else:
+                    logger.info("Connected to the relay at %s", self.url)
                     self.notify("[Relay] Connected. Alexa and texting can reach Jarvis.")
                     connected_before = True
 
@@ -128,8 +136,8 @@ class RelayClient:
                 try:
                     async for raw in websocket:
                         self._dispatch(raw)
-                except ConnectionClosed:
-                    logger.info("The relay connection closed, reconnecting")
+                except ConnectionClosed as e:
+                    logger.info("The relay connection closed (%s), reconnecting", e)
                 finally:
                     heartbeat.cancel()
                     self._connected.clear()
@@ -167,18 +175,28 @@ class RelayClient:
             logger.warning("Ignored a relay message with unknown type %r", message.get("type"))
             return
 
-        task = asyncio.create_task(self._run_handler(handler, message))
+        task = asyncio.create_task(self._run_handler(handler, message, len(raw)))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _run_handler(self, handler: MessageHandler, message: dict[str, Any]) -> None:
+    async def _run_handler(self, handler: MessageHandler, message: dict[str, Any], size: int) -> None:
         """
-        Run a handler, logging any failure so one bad message cannot go unnoticed.
+        Run a handler under the message's trace, logging any failure so one bad message
+        cannot go unnoticed.
 
         Args:
             handler: The handler.
             message: The message it handles.
+            size: The message's size as received, for the log.
         """
+        # Each handler runs in its own task, so the trace set here stays with this message.
+        source = str(message.get("type")).split(".")[0]
+        trace_id = message.get("trace_id")
+        if not isinstance(trace_id, str):
+            trace_id = None
+        logs.start_trace(source, trace_id)
+        if message.get("type") != LOG_TYPE:
+            logger.info("Received %s from the relay (%d bytes)", _describe(message), size)
         try:
             await handler(message)
         except Exception:
@@ -197,6 +215,56 @@ class RelayClient:
                 await websocket.send(json.dumps({"action": "ping"}))
             except ConnectionClosed:
                 return
+
+
+async def _log_lambda_records(message: dict[str, Any]) -> None:
+    """
+    Write the log records a Lambda forwarded to Jarvis's log, each with the time and
+    trace it was logged with on AWS.
+
+    Args:
+        message: A "relay.log" message with a list of records, each with "time" (Unix
+            seconds), "level", "logger", "trace" and "message".
+    """
+    records = message.get("records")
+    if not isinstance(records, list):
+        logger.warning("Ignored a relay.log message without records")
+        return
+
+    levels = logging.getLevelNamesMapping()
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        created = item.get("time")
+        text = item.get("message")
+        if not isinstance(created, (int, float)) or not isinstance(text, str):
+            continue
+
+        name = f"aws.{item.get('logger', 'lambda')}"
+        level = levels.get(str(item.get("level")), logging.INFO)
+        record = logging.LogRecord(name, level, pathname="", lineno=0, msg=text, args=None, exc_info=None)
+        record.created = created
+        record.msecs = (created % 1) * 1000
+        record.trace = str(item.get("trace", logs.NO_TRACE))
+        logging.getLogger(name).handle(record)
+
+
+def _describe(message: dict[str, Any]) -> str:
+    """
+    Name a relay message for a log line by its type or action and request id.
+
+    Args:
+        message: The message.
+    Returns:
+        A short description, like "reply for request 3f9a1c2b...".
+    """
+    kind = message.get("type")
+    if kind is None:
+        kind = message.get("action")
+    request_id = message.get("request_id")
+    if isinstance(request_id, str):
+        return f"{kind} for request {request_id}"
+    return str(kind)
 
 
 def _retry_unless_ssl_error(error: Exception) -> Exception | None:

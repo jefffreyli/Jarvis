@@ -95,12 +95,19 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: connections.handler
+      # It posts its log back to the backend. The stage name is written out because
+      # referencing RelayStage here would make a dependency cycle through the routes.
       Environment:
         Variables:
           RELAY_SECRET: !Ref RelaySecret
+          CONNECTIONS_URL: !Sub "https://${RelayWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref RelayTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RelayWebSocketApi}/prod/POST/@connections/*"
 
   ConnectionsPermission:
     Type: AWS::Lambda::Permission

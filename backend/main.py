@@ -4,8 +4,8 @@ hosted MCP server when signed in), starts the local canvas-mcp server when Canva
 set up, and builds the tool registry and the agent loop, then runs the gateways the user can reach Jarvis
 through: the terminal chat (which also switches into voice mode) and, when the AWS
 relay is configured, the Alexa skill and texting over iMessage through Linq. Every step the agent takes is streamed over a local
-websocket so the frontend can show it live. Quitting the terminal chat shuts everything
-down.
+websocket so the frontend can show it live, and everything is logged to jarvis.log.
+Quitting the terminal chat shuts everything down.
 Run from the backend directory: `python3 main.py`.
 """
 
@@ -15,6 +15,7 @@ import logging
 from mcp import McpError
 
 import config
+import logs
 from agent.loop import AgentLoop
 from agent.trace import HarnessObserver, report_storage
 from api.websocket import HarnessBroadcaster
@@ -23,6 +24,7 @@ from gateways.linq import LinqClient, LinqError
 from gateways.relay import RelayClient
 from gateways.terminal import TerminalGateway
 from gateways.text import TextGateway
+from gateways.transcript import Transcript
 from llm.hosted_mcp import HostedMcpServer, McpOAuth
 from llm.openai_client import OpenAIClient, OpenAIEmbedder
 from memory.episodic import EpisodeStore
@@ -45,6 +47,17 @@ from tools.shell import run_shell
 logger = logging.getLogger(__name__)
 
 
+def report(message: str) -> None:
+    """
+    Show a startup message in the terminal and log it.
+
+    Args:
+        message: What to say.
+    """
+    print(message)
+    logger.info(message)
+
+
 def build_mcp_servers() -> list[HostedMcpServer]:
     """
     Build the remote MCP servers OpenAI may call, leaving out any not signed in to.
@@ -54,7 +67,7 @@ def build_mcp_servers() -> list[HostedMcpServer]:
     """
     notion_auth = McpOAuth(config.NOTION_MCP_URL, config.NOTION_TOKEN_PATH, config.OAUTH_CALLBACK_PORT)
     if not notion_auth.signed_in():
-        print("Notion is off. To turn it on, run `python3 sign_in_notion.py` in backend/.")
+        report("Notion is off. To turn it on, run `python3 sign_in_notion.py` in backend/.")
         return []
 
     notion = HostedMcpServer(
@@ -76,18 +89,18 @@ async def start_canvas() -> LocalMcpServer | None:
     try:
         command, token, url = config.canvas_settings()
     except RuntimeError as e:
-        print(e)
+        report(str(e))
         return None
 
     env = dict(config.CANVAS_SERVER_ENV)
     env["CANVAS_API_TOKEN"] = token
     env["CANVAS_API_URL"] = url
-    canvas = LocalMcpServer("canvas", command, env, config.CANVAS_MCP_LOG_PATH)
+    canvas = LocalMcpServer("canvas", command, env)
     try:
         await canvas.start()
     except (OSError, McpError, TimeoutError) as e:
         logger.exception("Starting the canvas-mcp server failed")
-        print(f"Canvas is off: the canvas-mcp server did not start ({e}). See {config.CANVAS_MCP_LOG_PATH}.")
+        print(f"Canvas is off: the canvas-mcp server did not start ({e}). See {config.LOG_PATH}.")
         await canvas.stop()
         return None
     return canvas
@@ -164,7 +177,7 @@ def build_relay() -> RelayClient | None:
     try:
         url, secret = config.relay_settings()
     except RuntimeError as e:
-        print(e)
+        report(str(e))
         return None
     return RelayClient(url, secret)
 
@@ -182,7 +195,7 @@ def build_text_gateway(agent: AgentLoop, relay: RelayClient) -> TextGateway | No
     try:
         api_key, allowed_numbers, webhook_url = config.linq_settings()
     except RuntimeError as e:
-        print(e)
+        report(str(e))
         return None
     return TextGateway(agent, LinqClient(api_key), allowed_numbers, relay, webhook_url)
 
@@ -200,7 +213,8 @@ async def start_texting(gateway: TextGateway) -> None:
         logger.exception("Starting the texting gateway failed")
         print(f"\n[Text] Texting is off: {e}")
         return
-    print("\n[Text] Texting is on. Text the Linq number to reach Jarvis.")
+    print()
+    report("[Text] Texting is on. Text the Linq number to reach Jarvis.")
 
 
 async def start_harness(broadcaster: HarnessBroadcaster) -> bool:
@@ -258,7 +272,7 @@ async def serve(agent: AgentLoop, broadcaster: HarnessBroadcaster) -> None:
     texting = None
     starting = None
     if relay is not None:
-        AlexaGateway(agent, relay)
+        AlexaGateway(agent, relay, Transcript(config.ALEXA_TRANSCRIPT_PATH))
         texting = build_text_gateway(agent, relay)
         await relay.start()
         if texting is not None:
@@ -279,11 +293,8 @@ async def serve(agent: AgentLoop, broadcaster: HarnessBroadcaster) -> None:
 
 def main() -> None:
     """Configure logging and run Jarvis."""
-    logging.basicConfig(
-        filename=config.LOG_PATH,
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    logs.setup_logging(config.LOG_PATH)
+    logger.info("Jarvis starting with model %s", config.MODEL)
 
     database = Database(config.DATABASE_PATH, on_access=report_storage)
     try:
@@ -295,6 +306,7 @@ def main() -> None:
         pass
     finally:
         database.close()
+    logger.info("Jarvis stopped")
     print("\nGoodbye.")
 
 

@@ -5,7 +5,8 @@ chat runs each typed message through the agent and prints tool calls, results an
 answers as they arrive; typed approvals discard anything typed in advance, so an early
 "y" cannot approve a command the user has not seen. Typing "voice" starts voice mode,
 in which spoken commands are run and the answers are spoken too, until the user
-presses Enter or says "Jarvis, stop listening".
+presses Enter or says "Jarvis, stop listening". Each message gets its own trace in the
+log, under "terminal" or "voice".
 """
 
 import asyncio
@@ -16,6 +17,7 @@ import threading
 import sounddevice
 
 import config
+import logs
 from agent.loop import AgentLoop, Channel
 from agent.models import Message, Role, ToolCall
 from agent.prompts import TERMINAL_INSTRUCTIONS, VOICE_INSTRUCTIONS
@@ -131,16 +133,18 @@ class TerminalGateway:
             The final answer, or None if the turn failed.
         """
         answer = None
-        try:
-            async for message in self.agent.run(self.session, user_input, channel):
-                print_message(message)
-                if message.role == Role.ASSISTANT and len(message.tool_calls) == 0:
-                    answer = message.content
-        except Exception as e:
-            # One failed turn should not end the chat. Details go to the log file.
-            logger.exception("Turn failed")
-            print(f"\n[Error] {type(e).__name__}: {e}\n")
-            return None
+        with logs.traced(channel.name):
+            logger.info("Received from %s: %s", channel.name, logs.snippet(user_input))
+            try:
+                async for message in self.agent.run(self.session, user_input, channel):
+                    print_message(message)
+                    if message.role == Role.ASSISTANT and len(message.tool_calls) == 0:
+                        answer = message.content
+            except Exception as e:
+                # One failed turn should not end the chat. Details go to the log file.
+                logger.exception("Turn failed")
+                print(f"\n[Error] {type(e).__name__}: {e}\n")
+                return None
         return answer
 
     async def _approve_typed(self, call: ToolCall) -> bool:
@@ -180,6 +184,7 @@ class TerminalGateway:
             print(f"Could not start voice mode: {e}")
             return
 
+        logger.info("Voice mode on")
         print("Voice mode on. Say \"Hey Jarvis\" and then your request.")
         print("Press Enter or say \"Jarvis, stop listening\" to go back to typing.\n")
 
@@ -197,6 +202,7 @@ class TerminalGateway:
             error = conversation.exception()
             logger.error("Voice mode failed", exc_info=error)
             print(f"\n[Voice] Voice mode stopped: {type(error).__name__}: {error}")
+        logger.info("Voice mode off")
         print("Voice mode off.\n")
 
     async def _voice_conversation(self, voice: VoiceMode) -> None:

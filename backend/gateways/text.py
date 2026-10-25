@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import logs
 from agent.loop import AgentLoop, Channel
 from agent.models import Role, ToolCall
 from agent.prompts import TEXT_INSTRUCTIONS
@@ -143,10 +144,12 @@ class TextGateway:
             return
 
         if incoming is None:
+            logger.info("Ignored a %s webhook that is not an incoming text", payload.get("event_type"))
             return
 
         # Linq may deliver the same event more than once.
         if incoming.event_id in self._seen_events:
+            logger.info("Ignored a repeat of webhook event %s", incoming.event_id)
             return
         self._seen_events.append(incoming.event_id)
 
@@ -189,8 +192,10 @@ class TextGateway:
             conversation = TextConversation(chat_id)
             self._conversations[chat_id] = conversation
 
+        logger.info("Text from %s in chat %s: %s", sender, chat_id, logs.snippet(text))
         pending = conversation.pending_answer
         if pending is not None and not pending.done():
+            logger.info("Taking this as the answer to the approval question")
             pending.set_result(text)
             return
 
@@ -207,6 +212,7 @@ class TextGateway:
             except LinqError:
                 logger.exception("Sending the reply failed")
                 return
+            logger.info("Texted the reply to %s: %s", sender, logs.snippet(reply))
             self.notify(f"[Text to {sender}] {reply}")
 
     async def _run_turn(self, conversation: TextConversation, text: str) -> str:

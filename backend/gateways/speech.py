@@ -8,7 +8,9 @@ AI's Lightning voices and plays it with macOS's built-in `afplay`.
 
 import asyncio
 import json
+import logging
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,8 @@ TEXT_TO_SPEECH_URL = "https://api.smallest.ai/waves/v1/tts"
 TEXT_TO_SPEECH_SAMPLE_RATE = 24_000
 TEXT_TO_SPEECH_TIMEOUT_SECONDS = 30
 MAX_SPOKEN_CHARS = 8000
+
+logger = logging.getLogger(__name__)
 
 
 class SpeechError(Exception):
@@ -100,6 +104,7 @@ class SpeechToText:
             self._connection = await websockets.connect(self._url, additional_headers=self._headers)
         except (OSError, websockets.InvalidHandshake) as e:
             raise SpeechError(f"Could not connect to Smallest AI speech-to-text: {e}") from None
+        logger.info("Connected to Smallest AI speech-to-text")
 
     async def close(self) -> None:
         """Close the websocket."""
@@ -162,7 +167,14 @@ class TextToSpeech:
         if len(text) > MAX_SPOKEN_CHARS:
             text = text[:MAX_SPOKEN_CHARS]
 
+        started = time.monotonic()
         audio = await self._synthesize(text)
+        logger.info(
+            "Synthesized %d characters of speech in %.2fs (%d bytes)",
+            len(text),
+            time.monotonic() - started,
+            len(audio),
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "speech.wav"
             path.write_bytes(audio)

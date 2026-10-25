@@ -93,6 +93,7 @@ class HarnessBroadcaster:
             queue.put_nowait(payload)
         self._clients[client] = queue
         sender = asyncio.create_task(self._send_events(client, queue))
+        logger.info("Harness client connected from %s (%d connected)", origin, len(self._clients))
 
         try:
             # Clients only listen, so incoming messages are ignored until the socket closes.
@@ -102,6 +103,7 @@ class HarnessBroadcaster:
         finally:
             del self._clients[client]
             sender.cancel()
+            logger.info("Harness client disconnected (%d connected)", len(self._clients))
         return client
 
     async def _send_events(self, client: web.WebSocketResponse, queue: asyncio.Queue[str]) -> None:

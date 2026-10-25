@@ -4,7 +4,8 @@ each utterance through the AWS relay as an "alexa.ask" message, and Jarvis sends
 reply for that request, which the Lambda speaks. Each Alexa user has one ongoing
 conversation whose turns run one at a time. A tool that needs approval is asked aloud
 as the reply, and the user's next utterance is taken as the answer, so the rest of the
-turn replies to that newer request.
+turn replies to that newer request. Everything said is written to a local transcript
+that starts over with each new Alexa session.
 """
 
 import asyncio
@@ -13,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import logs
 from agent.loop import AgentLoop, Channel
 from agent.models import Role, ToolCall
 from agent.prompts import VOICE_INSTRUCTIONS
@@ -20,6 +22,7 @@ from agent.session import Session
 
 from .approval import describe_call, is_yes
 from .relay import RelayClient, RelayError
+from .transcript import Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +48,23 @@ class VoiceConversation:
 class AlexaGateway:
     """Answers the user's requests to the Jarvis Alexa skill."""
 
-    def __init__(self, agent: AgentLoop, relay: RelayClient, notify: Callable[[str], None] = print):
+    def __init__(
+        self,
+        agent: AgentLoop,
+        relay: RelayClient,
+        transcript: Transcript,
+        notify: Callable[[str], None] = print,
+    ):
         """
         Args:
             agent: The agent that answers.
             relay: The relay connection Alexa requests arrive on.
+            transcript: Records what is said in the current Alexa session.
             notify: Shows a one-line note about Alexa activity, by default in the terminal.
         """
         self.agent = agent
         self.relay = relay
+        self.transcript = transcript
         self.notify = notify
         self._conversations: dict[str, VoiceConversation] = {}
         relay.on(ASK_TYPE, self._handle_ask)
@@ -63,14 +74,22 @@ class AlexaGateway:
         Answer one utterance, or use it as the answer to a pending approval question.
 
         Args:
-            message: The relay message with the request id, Alexa user id and text.
+            message: The relay message with the request id, Alexa user id, Alexa session id
+                and text.
         """
         request_id = message.get("request_id")
         user_id = message.get("user_id")
+        session_id = message.get("session_id")
         text = message.get("text")
-        if not isinstance(request_id, str) or not isinstance(user_id, str) or not isinstance(text, str):
-            logger.warning("Ignored a malformed Alexa request")
-            return
+        fields = (request_id, user_id, session_id, text)
+        for value in fields:
+            if not isinstance(value, str):
+                logger.warning("Ignored a malformed Alexa request")
+                return
+
+        logger.info("Alexa request %s in session %s: %s", request_id, session_id[-8:], logs.snippet(text))
+        self.transcript.start(session_id)
+        self.transcript.add("You", text)
 
         conversation = self._conversations.get(user_id)
         if conversation is None:
@@ -79,6 +98,7 @@ class AlexaGateway:
 
         pending = conversation.pending_answer
         if pending is not None and not pending.done():
+            logger.info("Taking this as the answer to the approval question")
             conversation.reply_to = request_id
             pending.set_result(text)
             return
@@ -148,6 +168,8 @@ class AlexaGateway:
             text: What to say.
         """
         message = {"action": "reply", "request_id": conversation.reply_to, "text": text[:MAX_REPLY_CHARS]}
+        logger.info("Replying to Alexa request %s: %s", conversation.reply_to, logs.snippet(text))
+        self.transcript.add("Jarvis", text)
         try:
             await self.relay.send(message)
         except RelayError:

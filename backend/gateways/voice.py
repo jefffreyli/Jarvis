@@ -18,6 +18,8 @@ from enum import Enum
 
 import websockets
 
+import logs
+
 from .speech import Microphone, SpeechError, SpeechToText, TextToSpeech, Transcript
 
 logger = logging.getLogger(__name__)
@@ -165,6 +167,8 @@ class VoiceMode:
                     continue
 
                 heard = self._listener.hear(transcript)
+                if transcript.is_final and heard.kind != HeardKind.NOTHING:
+                    logger.info("Heard %s: %s", heard.kind.value, logs.snippet(transcript.text))
                 if heard.kind == HeardKind.NOTHING:
                     self._clear_live_line()
                 elif heard.kind == HeardKind.PARTIAL or heard.kind == HeardKind.WAKE:
@@ -197,12 +201,14 @@ class VoiceMode:
                     transcript = await self._next_transcript(ANSWER_TIMEOUT_SECONDS)
                 except asyncio.TimeoutError:
                     self._clear_live_line()
+                    logger.info("No spoken answer within %d seconds", ANSWER_TIMEOUT_SECONDS)
                     return ""
 
                 if not transcript.is_final:
                     self._show_live_line(transcript.text)
                 elif transcript.text != "":
                     self._finish_live_line(transcript.text)
+                    logger.info("Heard answer: %s", logs.snippet(transcript.text))
                     return transcript.text
         finally:
             self._set_listening(False)

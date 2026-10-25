@@ -9,14 +9,16 @@ tool results are committed to the session together, so a cancelled run never lea
 unanswered tool calls in history. With long-term memory, each finished turn (the user's
 message and the final answer) is saved as an episode after the answer is yielded.
 An optional observer receives a HarnessEvent for every stage of the turn, so a UI can
-follow the run live.
+follow the run live, and each turn, model reply, tool call and approval is also logged.
 """
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+import logs
 from llm.base import LLM
 from memory.memory import Memory
 from tools.registry import ApprovalCallback, ToolRegistry
@@ -86,6 +88,14 @@ class AgentLoop:
             An async iterator of assistant and tool messages, ending with the final answer.
         """
         trace = TurnTrace(self.observer, session.id)
+        started = time.monotonic()
+        logger.info(
+            "Turn %s started on %s in session %s: %s",
+            trace.turn_id[:8],
+            channel.name,
+            session.id[:8],
+            logs.snippet(user_input),
+        )
         trace.emit(
             EventType.TURN_STARTED,
             {
@@ -100,12 +110,15 @@ class AgentLoop:
             async for message in self._run_steps(session, user_input, channel, trace):
                 yield message
         except (asyncio.CancelledError, GeneratorExit):
+            logger.info("Turn %s cancelled after %.2fs", trace.turn_id[:8], time.monotonic() - started)
             trace.emit(EventType.TURN_FINISHED, {"outcome": TurnOutcome.CANCELLED})
             raise
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
+            logger.error("Turn %s failed after %.2fs: %s", trace.turn_id[:8], time.monotonic() - started, error)
             trace.emit(EventType.TURN_FINISHED, {"outcome": TurnOutcome.FAILED, "error": clip(error)})
             raise
+        logger.info("Turn %s finished in %.2fs", trace.turn_id[:8], time.monotonic() - started)
         trace.emit(EventType.TURN_FINISHED, {"outcome": TurnOutcome.COMPLETED})
 
     async def _run_steps(
@@ -142,8 +155,16 @@ class AgentLoop:
                 },
             )
 
+            logger.info(
+                "Step %d: sending %d messages and %d tools to the model (compacted: %s)",
+                step,
+                len(model_input),
+                len(tool_schemas),
+                session.summary != summary_before,
+            )
             trace.emit(EventType.MODEL_STARTED)
             reply = await self.llm.complete(model_input, tool_schemas)
+            _log_reply(step, reply)
             trace.emit(
                 EventType.MODEL_FINISHED,
                 {
@@ -156,6 +177,7 @@ class AgentLoop:
             # No tool calls means the model has given its final answer.
             if len(reply.tool_calls) == 0:
                 session.add(reply)
+                logger.info("Answer: %s", logs.snippet(reply.content))
                 trace.emit(EventType.ANSWER, {"text": clip(reply.content), "step_limit": False})
                 yield reply
                 await self._remember_turn(session, user_input, reply, trace)
@@ -179,6 +201,7 @@ class AgentLoop:
         notice_text = f"I stopped after {self.max_steps} steps without finishing. Let me know how to continue."
         notice = Message.assistant(notice_text)
         session.add(notice)
+        logger.warning("Stopped at the step limit of %d", self.max_steps)
         trace.emit(EventType.ANSWER, {"text": notice_text, "step_limit": True})
         yield notice
         await self._remember_turn(session, user_input, notice, trace)
@@ -198,8 +221,13 @@ class AgentLoop:
         ask_user = channel.approve
 
         async def approve(call: ToolCall) -> bool:
+            logger.info("Asking the user on %s to approve %s", channel.name, call.name)
             trace.emit(EventType.APPROVAL_REQUESTED, {"call_id": call.id})
             approved = await ask_user(call)
+            if approved:
+                logger.info("The user approved %s", call.name)
+            else:
+                logger.info("The user did not approve %s", call.name)
             trace.emit(EventType.APPROVAL_RESOLVED, {"call_id": call.id, "approved": approved})
             return approved
 
@@ -240,13 +268,22 @@ class AgentLoop:
         Returns:
             A tool result message answering the call.
         """
+        logger.info("Tool %s called with %s", call.name, logs.snippet(call.arguments))
         trace.emit(EventType.TOOL_STARTED, {"call_id": call.id, "name": call.name})
+        started = time.monotonic()
         failed = False
         try:
             output = await self.tools.execute(call, approve)
             result = Message.tool_result(call.id, output.text, output.images)
+            logger.info(
+                "Tool %s returned in %.2fs (%d images): %s",
+                call.name,
+                time.monotonic() - started,
+                len(output.images),
+                logs.snippet(output.text),
+            )
         except Exception as e:
-            logger.exception("Tool %s failed", call.name)
+            logger.exception("Tool %s failed after %.2fs", call.name, time.monotonic() - started)
             error_type = type(e).__name__
             result = Message.tool_result(call.id, f"Error running tool '{call.name}': {error_type}: {e}")
             failed = True
@@ -256,6 +293,30 @@ class AgentLoop:
             {"call_id": call.id, "output": clip(result.content), "images": len(result.images), "failed": failed},
         )
         return result
+
+
+def _log_reply(step: int, reply: Message) -> None:
+    """
+    Log what the model asked for in one reply.
+
+    Args:
+        step: The loop step the reply belongs to.
+        reply: The assistant message.
+    """
+    for hosted in reply.hosted_calls:
+        logger.info(
+            "Step %d: %s ran %s with %s and got %s",
+            step,
+            hosted.server,
+            hosted.name,
+            logs.snippet(hosted.arguments),
+            logs.snippet(hosted.output),
+        )
+    names = []
+    for call in reply.tool_calls:
+        names.append(call.name)
+    if len(names) > 0:
+        logger.info("Step %d: the model called %s", step, ", ".join(names))
 
 
 def _describe_calls(reply: Message) -> list[dict[str, str]]:

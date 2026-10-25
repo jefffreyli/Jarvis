@@ -7,11 +7,14 @@ through API Gateway's connection management API.
 """
 
 import json
+import logging
 import os
 import time
 
 import boto3
 from botocore.exceptions import ClientError
+
+logger = logging.getLogger("jarvis.store")
 
 TABLE = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
 BACKEND_KEY = "backend"
@@ -67,11 +70,21 @@ def send_to_backend(message: dict) -> None:
     # send the request to the APIGateway to send to agent
     connection_id = item["connection_id"]
     client = boto3.client("apigatewaymanagementapi", endpoint_url=os.environ["CONNECTIONS_URL"])
+    data = json.dumps(message).encode()
+    started = time.monotonic()
     try:
-        client.post_to_connection(ConnectionId=connection_id, Data=json.dumps(message).encode())
+        client.post_to_connection(ConnectionId=connection_id, Data=data)
     except client.exceptions.GoneException:
+        logger.warning("Backend connection %s is gone", connection_id)
         forget_backend(connection_id)
         raise BackendOffline() from None
+    logger.info(
+        "Posted %s to backend connection %s through API Gateway (%d bytes, %.0f ms)",
+        message.get("type"),
+        connection_id,
+        len(data),
+        (time.monotonic() - started) * 1000,
+    )
 
 
 # Alexa replies and pending requests

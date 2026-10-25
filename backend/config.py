@@ -11,9 +11,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-# Paths
+# Paths. Everything is logged to LOG_PATH, including the AWS Lambdas and canvas-mcp.
 LOG_PATH = PROJECT_ROOT / "jarvis.log"
 DATABASE_PATH = PROJECT_ROOT / "data" / "jarvis.db"
+ALEXA_TRANSCRIPT_PATH = PROJECT_ROOT / "data" / "alexa-transcript.txt"
 SKILLS_DIR = PROJECT_ROOT / "backend" / "skills"
 MESSAGES_DATABASE_PATH = Path.home() / "Library" / "Messages" / "chat.db"
 
@@ -30,9 +31,14 @@ NOTION_TOKEN_PATH = PROJECT_ROOT / "data" / "notion_oauth.json"
 OAUTH_CALLBACK_PORT = 8789
 
 # Canvas through canvas-mcp (github.com/vishalsachdev/canvas-mcp), which Jarvis runs
-# locally. CANVAS_SERVER_ENV makes the server register only its read-only student tools.
-CANVAS_MCP_LOG_PATH = PROJECT_ROOT / "canvas-mcp.log"
-CANVAS_SERVER_ENV = {"CANVAS_ROLE": "student", "ALLOWED_WRITE_TOOLS": "none"}
+# locally. CANVAS_SERVER_ENV makes the server register only its read-only student tools,
+# and makes its log plain lines (no banner or colors), since they go into jarvis.log.
+CANVAS_SERVER_ENV = {
+    "CANVAS_ROLE": "student",
+    "ALLOWED_WRITE_TOOLS": "none",
+    "FASTMCP_SHOW_SERVER_BANNER": "false",
+    "FASTMCP_ENABLE_RICH_LOGGING": "false",
+}
 
 # Voice mode (Smallest AI)
 WAKE_PHRASE = "hey jarvis"
