@@ -1,0 +1,8 @@
+TODO
+- Canvas access token expiration. 
+- get agent to ask follow ups if confused on the task so it can iterate with the user.
+
+Planning
+Canvas MCP
+- I want you to add tools for Canvas to the agent from opensource Canvas MCP (https://github.com/vishalsachdev/canvas-mcp)
+- I've already added the access token to the .env

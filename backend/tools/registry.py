@@ -11,7 +11,7 @@ from typing import Any
 
 from agent.models import ToolCall
 
-from .base import Tool, ToolError, ToolOutput
+from .base import BaseTool, ToolError, ToolOutput
 
 ApprovalCallback = Callable[[ToolCall], Awaitable[bool]]
 
@@ -23,7 +23,7 @@ class ToolRegistry:
 
     def __init__(
         self,
-        tools: list[Tool],
+        tools: list[BaseTool],
         max_output_chars: int = 20_000,
     ):
         """
@@ -34,7 +34,7 @@ class ToolRegistry:
         if max_output_chars <= 0:
             raise ValueError("max_output_chars must be positive")
 
-        self._tools: dict[str, Tool] = {}
+        self._tools: dict[str, BaseTool] = {}
         for tool in tools:
             if tool.name in self._tools:
                 raise ValueError(f"Duplicate tool name: {tool.name}")

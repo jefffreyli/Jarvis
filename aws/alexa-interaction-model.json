@@ -5,8 +5,15 @@
       "intents": [
         {
           "name": "JarvisIntent",
-          "slots": [{ "name": "query", "type": "Query" }],
-          "samples": ["{query}"]
+          "slots": [
+            {
+              "name": "query",
+              "type": "Query"
+            }
+          ],
+          "samples": [
+            "{query}"
+          ]
         },
         {
           "name": "UpdateIntent",
@@ -20,26 +27,177 @@
             "give me an update"
           ]
         },
-        { "name": "AMAZON.HelpIntent", "samples": [] },
-        { "name": "AMAZON.StopIntent", "samples": [] },
-        { "name": "AMAZON.CancelIntent", "samples": [] },
-        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
-        { "name": "AMAZON.FallbackIntent", "samples": [] }
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        }
       ],
       "types": [
         {
           "name": "Query",
           "values": [
-            { "name": { "value": "what's on my calendar today" } },
-            { "name": { "value": "text my mom that I'll be home late" } },
-            { "name": { "value": "do I have any new emails" } },
-            { "name": { "value": "remind me what I said about the trip" } },
-            { "name": { "value": "send an email to sam saying the meeting moved to three" } },
-            { "name": { "value": "what time is my first meeting tomorrow morning" } },
-            { "name": { "value": "summarize my unread messages" } },
-            { "name": { "value": "yes" } },
-            { "name": { "value": "no don't do that" } },
-            { "name": { "value": "call the pizza place and order a large pepperoni" } }
+            {
+              "name": {
+                "value": "what's on my calendar today"
+              }
+            },
+            {
+              "name": {
+                "value": "text my mom that I'll be home late"
+              }
+            },
+            {
+              "name": {
+                "value": "do I have any new emails"
+              }
+            },
+            {
+              "name": {
+                "value": "remind me what I said about the trip"
+              }
+            },
+            {
+              "name": {
+                "value": "send an email to sam saying the meeting moved to three"
+              }
+            },
+            {
+              "name": {
+                "value": "what time is my first meeting tomorrow morning"
+              }
+            },
+            {
+              "name": {
+                "value": "summarize my unread messages"
+              }
+            },
+            {
+              "name": {
+                "value": "yes"
+              }
+            },
+            {
+              "name": {
+                "value": "no don't do that"
+              }
+            },
+            {
+              "name": {
+                "value": "call the pizza place and order a large pepperoni"
+              }
+            },
+            {
+              "name": {
+                "value": "what's the weather like"
+              }
+            },
+            {
+              "name": {
+                "value": "add milk and eggs to my grocery list"
+              }
+            },
+            {
+              "name": {
+                "value": "how many meetings do I have this week"
+              }
+            },
+            {
+              "name": {
+                "value": "create a notion page called project ideas"
+              }
+            },
+            {
+              "name": {
+                "value": "what's on my to do list"
+              }
+            },
+            {
+              "name": {
+                "value": "move my two o'clock to four"
+              }
+            },
+            {
+              "name": {
+                "value": "did anyone reply to my email about the apartment"
+              }
+            },
+            {
+              "name": {
+                "value": "tell me a joke"
+              }
+            },
+            {
+              "name": {
+                "value": "what should I eat for dinner"
+              }
+            },
+            {
+              "name": {
+                "value": "read me the latest message from alex"
+              }
+            },
+            {
+              "name": {
+                "value": "schedule lunch with jordan on friday at noon"
+              }
+            },
+            {
+              "name": {
+                "value": "how long will it take to get to the airport"
+              }
+            },
+            {
+              "name": {
+                "value": "what is the capital of australia"
+              }
+            },
+            {
+              "name": {
+                "value": "explain how a transformer model works"
+              }
+            },
+            {
+              "name": {
+                "value": "find the notes from my last meeting"
+              }
+            },
+            {
+              "name": {
+                "value": "cancel it"
+              }
+            },
+            {
+              "name": {
+                "value": "sure go ahead"
+              }
+            },
+            {
+              "name": {
+                "value": "okay"
+              }
+            },
+            {
+              "name": {
+                "value": "thanks"
+              }
+            },
+            {
+              "name": {
+                "value": "never mind"
+              }
+            }
           ]
         }
       ]

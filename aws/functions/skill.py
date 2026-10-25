@@ -57,6 +57,7 @@ def handler(event: dict, context) -> dict:
     if intent == "JarvisIntent":
         query = request["intent"].get("slots", {}).get("query", {}).get("value", "")
         if query.strip() == "":
+            logger.info("JarvisIntent arrived with an empty query slot")
             return _speak("Sorry, I didn't catch that.")
         return _ask(user_id, query, started)
     if intent == "UpdateIntent":
@@ -65,6 +66,7 @@ def handler(event: dict, context) -> dict:
         return _speak("Just ask me anything, like what's on my calendar today.")
     if intent in STOP_INTENTS:
         return _speak("Goodbye.", end_session=True)
+    logger.info("Unhandled intent %s", intent)
     return _speak("Sorry, I didn't catch that.")
 
 

@@ -1,6 +1,7 @@
 """
 Starts Jarvis. It opens long-term memory and builds the OpenAI client (with Notion's
-hosted MCP server when signed in), the tool registry and the agent loop, then runs the gateways the user can reach Jarvis
+hosted MCP server when signed in), starts the local canvas-mcp server when Canvas is
+set up, and builds the tool registry and the agent loop, then runs the gateways the user can reach Jarvis
 through: the terminal chat (which also switches into voice mode) and, when the AWS
 relay is configured, the Alexa skill and texting over iMessage through Linq. Every step the agent takes is streamed over a local
 websocket so the frontend can show it live. Quitting the terminal chat shuts everything
@@ -10,6 +11,8 @@ Run from the backend directory: `python3 main.py`.
 
 import asyncio
 import logging
+
+from mcp import McpError
 
 import config
 from agent.loop import AgentLoop
@@ -28,10 +31,12 @@ from memory.procedural import SkillLibrary
 from memory.semantic import FactStore
 from storage.database import Database
 from tools.apple_calendar import create_event, delete_event, list_calendars, list_events, update_event
+from tools.base import BaseTool
 from tools.contacts import lookup_contact
 from tools.filesystem import read_file, view_image
 from tools.gmail import draft_email, organize_emails, read_email, read_thread, search_emails, send_email
 from tools.imessage import list_chats, read_messages, search_messages, send_imessage, view_attachment
+from tools.local_mcp import LocalMcpServer
 from tools.memory import memory_tools
 from tools.phone import check_phone_call, make_phone_call
 from tools.registry import ToolRegistry
@@ -61,13 +66,41 @@ def build_mcp_servers() -> list[HostedMcpServer]:
     return [notion]
 
 
-def build_agent(database: Database, observer: HarnessObserver) -> AgentLoop:
+async def start_canvas() -> LocalMcpServer | None:
+    """
+    Start the canvas-mcp server, reporting in the terminal if Canvas is off.
+
+    Returns:
+        The running server, or None when Canvas is not set up or the server fails to start.
+    """
+    try:
+        command, token, url = config.canvas_settings()
+    except RuntimeError as e:
+        print(e)
+        return None
+
+    env = dict(config.CANVAS_SERVER_ENV)
+    env["CANVAS_API_TOKEN"] = token
+    env["CANVAS_API_URL"] = url
+    canvas = LocalMcpServer("canvas", command, env, config.CANVAS_MCP_LOG_PATH)
+    try:
+        await canvas.start()
+    except (OSError, McpError, TimeoutError) as e:
+        logger.exception("Starting the canvas-mcp server failed")
+        print(f"Canvas is off: the canvas-mcp server did not start ({e}). See {config.CANVAS_MCP_LOG_PATH}.")
+        await canvas.stop()
+        return None
+    return canvas
+
+
+def build_agent(database: Database, observer: HarnessObserver, extra_tools: list[BaseTool]) -> AgentLoop:
     """
     Build the agent with its model, long-term memory and tools.
 
     Args:
         database: The database that holds long-term memory.
         observer: Receives an event for each step the agent takes.
+        extra_tools: Tools from local MCP servers, added to the built-in ones.
     Returns:
         The agent loop.
     """
@@ -91,7 +124,7 @@ def build_agent(database: Database, observer: HarnessObserver) -> AgentLoop:
         skills=SkillLibrary(config.SKILLS_DIR),
     )
 
-    tools = [
+    tools: list[BaseTool] = [
         read_file,
         view_image,
         run_shell,
@@ -116,6 +149,7 @@ def build_agent(database: Database, observer: HarnessObserver) -> AgentLoop:
         check_phone_call,
     ]
     tools += memory_tools(memory)
+    tools += extra_tools
 
     return AgentLoop(llm, ToolRegistry(tools), memory, observer=observer)
 
@@ -187,7 +221,28 @@ async def start_harness(broadcaster: HarnessBroadcaster) -> bool:
     return True
 
 
-async def run(agent: AgentLoop, broadcaster: HarnessBroadcaster) -> None:
+async def run(database: Database, broadcaster: HarnessBroadcaster) -> None:
+    """
+    Start Canvas, build the agent and serve it until the user quits, then stop Canvas.
+
+    Args:
+        database: The database that holds long-term memory.
+        broadcaster: Streams the agent's events to the frontend.
+    """
+    # Canvas starts first because its tools are listed by the running server.
+    canvas = await start_canvas()
+    try:
+        canvas_tools: list[BaseTool] = []
+        if canvas is not None:
+            canvas_tools += canvas.tools
+        agent = build_agent(database, broadcaster.publish, canvas_tools)
+        await serve(agent, broadcaster)
+    finally:
+        if canvas is not None:
+            await canvas.stop()
+
+
+async def serve(agent: AgentLoop, broadcaster: HarnessBroadcaster) -> None:
     """
     Run the terminal chat, with Alexa, texting and the live harness view in the
     background, until the user quits.
@@ -233,8 +288,7 @@ def main() -> None:
     database = Database(config.DATABASE_PATH, on_access=report_storage)
     try:
         broadcaster = HarnessBroadcaster(config.HARNESS_PORT, config.HARNESS_ALLOWED_ORIGINS)
-        agent = build_agent(database, broadcaster.publish)
-        asyncio.run(run(agent, broadcaster))
+        asyncio.run(run(database, broadcaster))
     except RuntimeError as e:
         print(e)
     except KeyboardInterrupt:

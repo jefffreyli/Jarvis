@@ -1,5 +1,6 @@
 """
-Uses the @tool decorator that turns an async function into one.
+BaseTool is what the ToolRegistry runs: a Tool built from a Python function, or an
+McpTool that forwards calls to a local MCP server. Uses the @tool decorator that turns an async function into one.
 The decorator reads the function's signature and docstring to build a Pydantic model
 for its arguments. That model provides the JSON schema shown to the LLM and validates
 the LLM's arguments before the function runs. The first part of the docstring becomes
@@ -8,6 +9,7 @@ returns text, or a ToolOutput when it also has images for the LLM to see.
 """
 
 import inspect
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, get_type_hints
@@ -36,7 +38,55 @@ class ToolError(Exception):
     """Raised when a tool call cannot run, such as an unknown tool or invalid arguments."""
 
 
-class Tool:
+class BaseTool(ABC):
+    """Anything the ToolRegistry can offer the LLM and run."""
+
+    name: str
+
+    @abstractmethod
+    def schema(self) -> dict[str, Any]:
+        """
+        Describe the tool for the LLM.
+
+        Returns:
+            A {"name", "description", "parameters"} dict, where parameters is a JSON schema.
+        """
+
+    @abstractmethod
+    def parse_arguments(self, arguments: str) -> Any:
+        """
+        Parse and check the LLM's JSON arguments, raising ToolError if they are invalid.
+
+        Args:
+            arguments: JSON-encoded arguments from the tool call.
+        Returns:
+            The parsed arguments, passed on to needs_approval and run.
+        """
+
+    @abstractmethod
+    def needs_approval(self, args: Any) -> bool:
+        """
+        Decide whether this call must be approved by the user before it runs.
+
+        Args:
+            args: Arguments returned by parse_arguments.
+        Returns:
+            True if the user must approve the call.
+        """
+
+    @abstractmethod
+    async def run(self, args: Any) -> ToolOutput:
+        """
+        Run the tool.
+
+        Args:
+            args: Arguments returned by parse_arguments.
+        Returns:
+            The tool's output.
+        """
+
+
+class Tool(BaseTool):
     """An async function the LLM can call, with a validated argument schema."""
 
     def __init__(self, function: ToolFunction, requires_approval: ApprovalRule):

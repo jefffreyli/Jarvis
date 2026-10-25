@@ -29,6 +29,11 @@ NOTION_MCP_URL = "https://mcp.notion.com/mcp"
 NOTION_TOKEN_PATH = PROJECT_ROOT / "data" / "notion_oauth.json"
 OAUTH_CALLBACK_PORT = 8789
 
+# Canvas through canvas-mcp (github.com/vishalsachdev/canvas-mcp), which Jarvis runs
+# locally. CANVAS_SERVER_ENV makes the server register only its read-only student tools.
+CANVAS_MCP_LOG_PATH = PROJECT_ROOT / "canvas-mcp.log"
+CANVAS_SERVER_ENV = {"CANVAS_ROLE": "student", "ALLOWED_WRITE_TOOLS": "none"}
+
 # Voice mode (Smallest AI)
 WAKE_PHRASE = "hey jarvis"
 SPEECH_TO_TEXT_MODEL = "pulse"
@@ -72,6 +77,25 @@ def relay_settings() -> tuple[str, str]:
             "RELAY_URL and RELAY_SECRET to the .env file at the project root."
         )
     return url, secret
+
+
+def canvas_settings() -> tuple[str, str, str]:
+    """
+    Read the Canvas settings for the canvas-mcp server.
+
+    Returns:
+        The command that starts canvas-mcp, the Canvas API token and the Canvas API URL.
+    """
+    command = os.environ.get("CANVAS_MCP_COMMAND", "canvas-mcp-server")
+    token = os.environ.get("CANVAS_API_TOKEN", "")
+    url = os.environ.get("CANVAS_API_URL", "")
+    if token == "" or url == "":
+        raise RuntimeError(
+            "Canvas is off. To turn it on, install canvas-mcp and add CANVAS_API_TOKEN and "
+            "CANVAS_API_URL (ending in /api/v1) to the .env file at the project root. Set "
+            "CANVAS_MCP_COMMAND if canvas-mcp-server is not on your PATH."
+        )
+    return command, token, url
 
 
 def gmail_credentials() -> tuple[str, str]:
