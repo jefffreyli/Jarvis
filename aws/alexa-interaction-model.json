@@ -16,18 +16,6 @@
           ]
         },
         {
-          "name": "UpdateIntent",
-          "slots": [],
-          "samples": [
-            "any update",
-            "any updates",
-            "what did you find",
-            "are you done",
-            "is it done",
-            "give me an update"
-          ]
-        },
-        {
           "name": "AMAZON.HelpIntent",
           "samples": []
         },
@@ -196,6 +184,26 @@
             {
               "name": {
                 "value": "never mind"
+              }
+            },
+            {
+              "name": {
+                "value": "any update"
+              }
+            },
+            {
+              "name": {
+                "value": "are you done yet"
+              }
+            },
+            {
+              "name": {
+                "value": "search something up for me"
+              }
+            },
+            {
+              "name": {
+                "value": "look up the best ramen near me"
               }
             }
           ]

@@ -19,3 +19,15 @@ Intent
 - An intent is Alexa's label for what the user wants to do. Alexa doesn't send your Lambda the raw audio, or even reliably the full transcript. It converts speech to text, matches that text against intents you declared ahead of time, and sends your Lambda the name of the matching intent.
 - JarvisIntent: passes the entire query to the agent
 - UpdateIntent: lets the agent work in the background and ask Alexa for the update when the task takes longer than 8 seconds, which is Alexa's limit. Alexa can't automatically reply so this is a work around. The message is saved into a queue in the db so when someone asks for an update it will retrieve from there.
+
+Quickstart:
+```
+source /Users/jeffreyli/Desktop/sideprojects/Jarvis/.venv/bin/activate
+cd backend
+python3 main.py
+```
+
+How to check logs:
+```
+
+```

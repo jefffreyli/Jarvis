@@ -4,7 +4,8 @@ The Alexa skill's endpoint. Each utterance is sent to the Jarvis backend through
 relay websocket, and the Lambda waits for the reply to show up in the table. Alexa
 gives a skill 8 seconds to answer, so if Jarvis is slower the user hears that it is
 still working and the request is remembered; opening the skill or saying "any update"
-then speaks the answer once it has arrived. Each invocation is logged under the trace
+then speaks the answer once it has arrived. The skill has a single catch-all intent, so
+"any update" is recognized here from the words themselves. Each invocation is logged under the trace
 "alexa:<first 8 characters of its request id>", which the backend logs under too.
 """
 
@@ -24,6 +25,17 @@ POLL_SECONDS = 0.2
 MAX_SPEECH_CHARS = 8000
 REPROMPT = "Anything else?"
 STOP_INTENTS = ("AMAZON.StopIntent", "AMAZON.CancelIntent", "AMAZON.NavigateHomeIntent")
+UPDATE_PHRASES = (
+    "any update",
+    "any updates",
+    "any update yet",
+    "any updates yet",
+    "give me an update",
+    "are you done",
+    "are you done yet",
+    "is it done",
+    "is it done yet",
+)
 
 
 def handler(event: dict, context) -> dict:
@@ -99,10 +111,10 @@ def _handle(event: dict, request_id: str, started: float) -> dict:
         if query.strip() == "":
             logger.info("JarvisIntent arrived with an empty query slot")
             return _speak("Sorry, I didn't catch that.")
+        if _normalize(query) in UPDATE_PHRASES:
+            return _check_pending(user_id, "There's nothing I'm still working on.")
         session_id = event["session"]["sessionId"]
         return _ask(request_id, user_id, session_id, query, started)
-    if intent == "UpdateIntent":
-        return _check_pending(user_id, "There's nothing I'm still working on.")
     if intent == "AMAZON.HelpIntent":
         return _speak("Just ask me anything, like what's on my calendar today.")
     if intent in STOP_INTENTS:
@@ -179,6 +191,22 @@ def _check_pending(user_id: str, nothing_pending: str) -> dict:
     store.delete_reply(request_id)
     logger.info("Speaking the reply to pending request %s", request_id)
     return _speak(reply)
+
+
+def _normalize(text: str) -> str:
+    """
+    Lowercase an utterance and drop punctuation and extra spaces, for phrase matching.
+
+    Args:
+        text: What the user said.
+    Returns:
+        The normalized text.
+    """
+    kept = ""
+    for character in text.lower():
+        if character.isalnum() or character.isspace():
+            kept += character
+    return " ".join(kept.split())
 
 
 def _speak(text: str, end_session: bool = False) -> dict:
